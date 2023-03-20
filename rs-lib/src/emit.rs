@@ -19,6 +19,7 @@ use deno_ast::SourceTextInfo;
 use deno_graph::Module;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::io::Write;
 
 use crate::bundle_hook::BundleHook;
 use crate::text::strip_bom;
@@ -67,16 +68,23 @@ struct BundleLoader<'a> {
   graph: &'a deno_graph::ModuleGraph,
 }
 
+
 impl swc::bundler::Load for BundleLoader<'_> {
   fn load(
     &self,
     file_name: &swc::common::FileName,
   ) -> Result<swc::bundler::ModuleData> {
+    let mut ext = Vec::new();
+
     match file_name {
       swc::common::FileName::Url(specifier) => {
-        let (source, media_type) = match self.graph.get(specifier) {
+        let (source, media_type): (&str, MediaType) = match self.graph.get(specifier) {
           Some(Module::Esm(m)) => (&m.source, m.media_type),
           Some(Module::Json(m)) => (&m.source, m.media_type),
+          Some(Module::External(m)) => {
+            write!(&mut ext, "export * from \"{}\";", m.specifier.to_string()).unwrap();
+            (&std::str::from_utf8(&ext).unwrap(), MediaType::TypeScript)
+          },
           Some(_) => {
             return Err(anyhow!(
               "Module \"{}\" was an unsupported module kind.",
@@ -176,6 +184,7 @@ pub fn bundle_graph(
         .collect(),
       ..Default::default()
     };
+
     // This hook will rewrite the `import.meta` when bundling to give a consistent
     // behavior between bundled and unbundled code.
     let hook = Box::new(BundleHook);
